@@ -90,6 +90,10 @@ function parseSessions(file) {
   return fs.readFileSync(file, 'utf8').trim().split('\n').map(l => l.trim()).filter(Boolean);
 }
 
+function parseDiscord(file) {
+  return fs.readFileSync(file, 'utf8').trim().split('\n').map(l => l.trim()).filter(Boolean);
+}
+
 // ─── WALLET LOGIN ─────────────────────────────────────────────────────────────
 async function walletLogin(privkey) {
   const wallet = new ethers.Wallet(privkey);
@@ -121,9 +125,9 @@ async function startTask(token, taskId) {
   });
   const userStatus = res.body?.data?.userStatus;
   const tgLink = res.body?.data?.tgLink || null;
-  if (res.body?.code === 0 || userStatus === 'claimable' || userStatus === 'done') return { ok: true, tgLink };
+  if (res.body?.code === 0 || userStatus === 'claimable' || userStatus === 'done') return { ok: true, tgLink, userStatus };
   const msg = JSON.stringify(res.body || '');
-  if (msg.toLowerCase().includes('already')) return { ok: true, tgLink };
+  if (msg.toLowerCase().includes('already')) return { ok: true, tgLink, userStatus: 'done' };
   throw new Error(`Start task ${taskId} gagal: ${msg}`);
 }
 
@@ -222,6 +226,64 @@ async function connectX(token, akun) {
   throw new Error(`Callback X gagal: ${callbackRes.redirect || JSON.stringify(callbackRes.body)}`);
 }
 
+// ─── TASK 4: KONEK DISCORD ────────────────────────────────────────────────────
+async function connectDiscord(svpToken, dcToken) {
+  // 1. get discord oauth url dari svpstars
+  const startRes = await req(`${BASE_URL}/api/v1/social/discord/start`, {
+    headers: { 'Authorization': `Bearer ${svpToken}`, 'Origin': BASE_URL, 'Referer': `${BASE_URL}/` },
+  });
+
+  const authUrl = startRes.body?.data?.authUrl || startRes.body?.data?.url || startRes.redirect;
+  if (!authUrl) throw new Error(`Gagal dapet Discord authUrl: ${JSON.stringify(startRes.body)}`);
+
+  const authUrlObj = new URL(authUrl);
+  const state = authUrlObj.searchParams.get('state');
+
+  // 2. POST authorize ke discord pake user token
+  const dcRes = await req(`https://discord.com/api/v9/oauth2/authorize?${authUrlObj.searchParams.toString()}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': dcToken,
+      'Content-Type': 'application/json',
+      'Origin': 'https://discord.com',
+      'Referer': 'https://discord.com/',
+      'X-Discord-Locale': 'en-US',
+      'X-Discord-Timezone': 'Asia/Jakarta',
+    },
+    body: {
+      authorize: true,
+      guild_id: '1486654850166030442',
+      permissions: '0',
+      integration_type: 0,
+      location_context: { guild_id: '10000', channel_id: '10000', channel_type: 10000 },
+    },
+  });
+
+  // response berisi location/redirect dengan code
+  const location = dcRes.body?.location || dcRes.redirect;
+  if (!location) throw new Error(`Discord authorize gagal: ${JSON.stringify(dcRes.body)}`);
+
+  const locationUrl = new URL(location);
+  const code = locationUrl.searchParams.get('code');
+  if (!code) throw new Error('Code Discord tidak ditemukan di redirect');
+
+  // 3. callback ke svpstars
+  const callbackRes = await req(`${BASE_URL}/api/v1/social/discord/callback?state=${state}&code=${code}`, {
+    headers: {
+      'Authorization': `Bearer ${svpToken}`,
+      'Referer': 'https://discord.com/',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'cross-site',
+    },
+  });
+
+  if (callbackRes.redirect?.includes('discord=linked') || callbackRes.status === 200 || callbackRes.status === 302) {
+    if (!callbackRes.redirect?.includes('discord=error')) return true;
+  }
+  throw new Error(`Callback Discord gagal: ${callbackRes.redirect || JSON.stringify(callbackRes.body)}`);
+}
+
 // ─── TASK 2: FOLLOW X ─────────────────────────────────────────────────────────
 async function followX(akun) {
   const { authtoken, ct0 } = akun;
@@ -269,7 +331,7 @@ function runTele(sessionString, startParam) {
 }
 
 // ─── PROSES 1 AKUN ───────────────────────────────────────────────────────────
-async function processAkun(privkey, akun, session, label) {
+async function processAkun(privkey, akun, session, dcToken, label) {
   // Login
   console.log(`\n${label} 🔑 Wallet login...`);
   const { token, address } = await walletLogin(privkey);
@@ -277,43 +339,77 @@ async function processAkun(privkey, akun, session, label) {
 
   await sleep(1000);
 
+  let pts1 = 0, pts2 = 0, pts3 = 0, pts4 = 0;
+
   // ── Task 1: Bind X ──
   console.log(`${label} 🐦 [Task 1] Start + Konek X...`);
-  await startTask(token, 1);
-  await sleep(1000);
-  await connectX(token, akun);
-  console.log(`${label} ✅ X linked!`);
-  await sleep(5000);
-  const { points: pts1, note: n1 } = await claimTask(token, 1);
-  console.log(`${label} 🎁 Task 1 claimed! +${pts1} pts${n1 ? ` (${n1})` : ''}`);
+  const { userStatus: s1 } = await startTask(token, 1);
+  if (s1 === 'done') {
+    console.log(`${label} ⏭️  Task 1 sudah done, skip`);
+  } else {
+    await sleep(1000);
+    await connectX(token, akun);
+    console.log(`${label} ✅ X linked!`);
+    await sleep(5000);
+    const { points: p1, note: n1 } = await claimTask(token, 1);
+    pts1 = p1;
+    console.log(`${label} 🎁 Task 1 claimed! +${pts1} pts${n1 ? ` (${n1})` : ''}`);
+  }
 
   await sleep(2000);
 
   // ── Task 2: Follow X ──
   console.log(`${label} 👤 [Task 2] Start + Follow @${FOLLOW_TARGET}...`);
-  await startTask(token, 2);
-  await sleep(1000);
-  const { note: fn } = await followX(akun);
-  console.log(`${label} ✅ Follow OK${fn ? ` (${fn})` : ''}`);
-  await sleep(3000);
-  const { points: pts2, note: n2 } = await claimTask(token, 2);
-  console.log(`${label} 🎁 Task 2 claimed! +${pts2} pts${n2 ? ` (${n2})` : ''}`);
+  const { userStatus: s2 } = await startTask(token, 2);
+  if (s2 === 'done') {
+    console.log(`${label} ⏭️  Task 2 sudah done, skip`);
+  } else {
+    await sleep(1000);
+    const { note: fn } = await followX(akun);
+    console.log(`${label} ✅ Follow OK${fn ? ` (${fn})` : ''}`);
+    await sleep(3000);
+    const { points: p2, note: n2 } = await claimTask(token, 2);
+    pts2 = p2;
+    console.log(`${label} 🎁 Task 2 claimed! +${pts2} pts${n2 ? ` (${n2})` : ''}`);
+  }
 
   await sleep(2000);
 
   // ── Task 3: Join Telegram ──
   console.log(`${label} 📱 [Task 3] Start + Join Telegram...`);
-  const { tgLink } = await startTask(token, 3);
-  const startParam = tgLink ? new URL(tgLink).searchParams.get('start') : null;
-  console.log(`     tgLink: ${tgLink} | startParam: ${startParam}`);
-  await sleep(1000);
-  await runTele(session, startParam);
-  console.log(`${label} ✅ Telegram done!`);
-  await sleep(3000);
-  const { points: pts3, note: n3 } = await claimTask(token, 3);
-  console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+  const { tgLink, userStatus: s3 } = await startTask(token, 3);
+  if (s3 === 'done') {
+    console.log(`${label} ⏭️  Task 3 sudah done, skip`);
+  } else {
+    const startParam = tgLink ? new URL(tgLink).searchParams.get('start') : null;
+    console.log(`     tgLink: ${tgLink} | startParam: ${startParam}`);
+    await sleep(1000);
+    await runTele(session, startParam);
+    console.log(`${label} ✅ Telegram done!`);
+    await sleep(3000);
+    const { points: p3, note: n3 } = await claimTask(token, 3);
+    pts3 = p3;
+    console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+  }
 
-  const total = pts1 + pts2 + pts3;
+  await sleep(2000);
+
+  // ── Task 4: Konek Discord ──
+  console.log(`${label} 💬 [Task 4] Start + Konek Discord...`);
+  const { userStatus: s4 } = await startTask(token, 4);
+  if (s4 === 'done') {
+    console.log(`${label} ⏭️  Task 4 sudah done, skip`);
+  } else {
+    await sleep(1000);
+    await connectDiscord(token, dcToken);
+    console.log(`${label} ✅ Discord linked!`);
+    await sleep(5000);
+    const { points: p4, note: n4 } = await claimTask(token, 4);
+    pts4 = p4;
+    console.log(`${label} 🎁 Task 4 claimed! +${pts4} pts${n4 ? ` (${n4})` : ''}`);
+  }
+
+  const total = pts1 + pts2 + pts3 + pts4;
   console.log(`${label} 🏆 Total: +${total} pts`);
   return address;
 }
@@ -323,7 +419,8 @@ async function main() {
   const privkeys = parseWallets('wallet.txt');
   const akuns    = parseAkun('akun.txt');
   const sessions = parseSessions('sessions.txt');
-  const total    = Math.min(privkeys.length, akuns.length, sessions.length);
+  const discords = parseDiscord('discord.txt');
+  const total    = Math.min(privkeys.length, akuns.length, sessions.length, discords.length);
 
   console.log(`\n╔══════════════════════════════════╗`);
   console.log(`║        SVP Stars Bot             ║`);
@@ -358,7 +455,7 @@ async function main() {
   for (let i = startIdx; i < endIdx; i++) {
     const label = `[${i+1}/${total}]`;
     try {
-      const address = await processAkun(privkeys[i], akuns[i], sessions[i], label);
+      const address = await processAkun(privkeys[i], akuns[i], sessions[i], discords[i], label);
       results.push({ index: i+1, address, status: 'OK' });
     } catch (e) {
       console.error(`${label} ❌ ${e.message}`);
