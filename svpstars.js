@@ -259,29 +259,41 @@ async function connectX(jwtToken, xAccount) {
 }
 
 // ─── STEP 3: CLAIM ───────────────────────────────────────────────────────────
-async function claimTask(jwtToken, taskId = 1) {
-  const claimRes = await req(`${BASE_URL}/api/v1/tasks/${taskId}/claim`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${jwtToken}`,
-      'Content-Type': 'application/json',
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/`,
-    },
-    body: {},
-  });
+async function claimTask(jwtToken, taskId = 1, maxRetry = 5, retryDelay = 5000) {
+  for (let attempt = 1; attempt <= maxRetry; attempt++) {
+    const claimRes = await req(`${BASE_URL}/api/v1/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`,
+        'Content-Type': 'application/json',
+        'Origin': BASE_URL,
+        'Referer': `${BASE_URL}/`,
+      },
+      body: {},
+    });
 
-  if (claimRes.body?.code === 0) {
-    const pts = claimRes.body?.data?.pointsAwarded || claimRes.body?.data?.totalPoints || 0;
-    return { ok: true, points: pts };
+    if (claimRes.body?.code === 0) {
+      const pts = claimRes.body?.data?.pointsAwarded || claimRes.body?.data?.totalPoints || 0;
+      return { ok: true, points: pts };
+    }
+
+    const msg = JSON.stringify(claimRes.body || '');
+
+    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('done')) {
+      return { ok: true, points: 0, note: 'sudah pernah claim' };
+    }
+
+    // verification not ready → retry
+    if (claimRes.body?.code === 1002) {
+      console.log(`     ⏳ Claim attempt ${attempt}/${maxRetry} — verification not ready, retry in ${retryDelay/1000}s...`);
+      if (attempt < maxRetry) await sleep(retryDelay);
+      continue;
+    }
+
+    throw new Error(`Claim gagal: ${msg}`);
   }
 
-  const msg = JSON.stringify(claimRes.body || '');
-  if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('done')) {
-    return { ok: true, points: 0, note: 'sudah pernah claim' };
-  }
-
-  throw new Error(`Claim gagal: ${msg}`);
+  throw new Error(`Claim gagal setelah ${maxRetry}x retry: verification not ready`);
 }
 
 // ─── PROSES 1 AKUN ───────────────────────────────────────────────────────────
