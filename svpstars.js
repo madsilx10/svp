@@ -122,7 +122,11 @@ async function walletLogin(privkey) {
   }
   const nonce = nonceRes.body.data.nonce;
 
-  const message = `Sign in to SVP Rewards\n\nAddress: ${address}\nNonce: ${nonce}`;
+  // pakai message langsung dari API (bukan construct manual)
+  const message = nonceRes.body.data.message
+    || `Sign in to SVP Rewards\n\nAddress: ${address}\nNonce: ${nonce}`;
+
+  console.log(`     message: ${JSON.stringify(message)}`);
   const signature = await wallet.signMessage(message);
 
   const loginRes = await req(`${BASE_URL}/api/v1/auth/login`, {
