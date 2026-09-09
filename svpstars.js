@@ -246,20 +246,34 @@ async function connectX(jwtToken, xAccount) {
     },
   });
 
+  // log callback response buat debug
+  console.log(`     [callback] status: ${callbackRes.status} | redirect: ${callbackRes.redirect || '-'}`);
+  console.log(`     [callback] body: ${JSON.stringify(callbackRes.body).slice(0, 200)}`);
+
+  // ambil token baru kalau ada (SVP mungkin issue JWT baru setelah X linked)
+  const newToken = callbackRes.body?.data?.token || callbackRes.body?.token || null;
+  if (newToken) console.log(`     [callback] new token detected!`);
+
   if (
     callbackRes.redirect?.includes('x=linked') ||
     callbackRes.body?.message === 'ok' ||
     callbackRes.status === 200 ||
     callbackRes.status === 302
   ) {
-    return true;
+    return newToken || true;
   }
+
+  // log response callback buat debug
+  console.log(`     callback status: ${callbackRes.status}`);
+  console.log(`     callback redirect: ${callbackRes.redirect || '(none)'}`);
+  console.log(`     callback body: ${JSON.stringify(callbackRes.body).slice(0, 300)}`);
+  console.log(`     callback headers: set-cookie=${callbackRes.headers?.['set-cookie']}`);
 
   throw new Error(`Callback gagal: status ${callbackRes.status} ${JSON.stringify(callbackRes.body)}`);
 }
 
 // ─── STEP 3: CLAIM ───────────────────────────────────────────────────────────
-async function claimTask(jwtToken, taskId = 1, maxRetry = 5, retryDelay = 5000) {
+async function claimTask(jwtToken, taskId = 1, maxRetry = 10, retryDelay = 15000) {
   for (let attempt = 1; attempt <= maxRetry; attempt++) {
     const claimRes = await req(`${BASE_URL}/api/v1/tasks/${taskId}/claim`, {
       method: 'POST',
@@ -305,13 +319,14 @@ async function processAkun(privkey, akun, label) {
   await sleep(1000);
 
   console.log(`${label} 🐦 Konek X...`);
-  await connectX(token, akun);
-  console.log(`${label} ✅ X linked!`);
+  const newToken = await connectX(token, akun);
+  const claimToken = (typeof newToken === 'string') ? newToken : token;
+  console.log(`${label} ✅ X linked!${typeof newToken === 'string' ? ' (token diperbarui)' : ''}`);
 
-  await sleep(1000);
+  await sleep(2000);
 
   console.log(`${label} 🎁 Claim...`);
-  const { points, note } = await claimTask(token);
+  const { points, note } = await claimTask(claimToken);
   console.log(`${label} ✅ Claim OK! +${points} pts${note ? ` (${note})` : ''}`);
 
   return address;
