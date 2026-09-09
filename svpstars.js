@@ -177,6 +177,8 @@ async function connectX(jwtToken, xAccount) {
     xAccount._state = state;
   }
 
+  console.log(`     [start] status: ${startRes.status} | redirect: ${startRes.redirect || '-'}`);
+  console.log(`     [start] body: ${JSON.stringify(startRes.body).slice(0, 300)}`);
   if (!authUrl) throw new Error(`Gagal dapet auth URL X: ${JSON.stringify(startRes.body)}`);
 
   // Step 2: GET auth_code via /i/api/2/oauth2/authorize (JSON endpoint, bukan HTML)
