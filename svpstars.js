@@ -3,22 +3,23 @@ const https = require('https');
 const crypto = require('crypto');
 const { ethers } = require('ethers');
 const readline = require('readline');
+const { spawn } = require('child_process');
 
 // ─── CONFIG ─────────────────────────────────────────────────────────────────
-const INVITE_CODE = '7C0TM814';
-const BASE_URL = 'https://rewards.svpstars.com';
-const X_API = 'https://api.x.com';
-const X_AUTH = 'https://x.com';
-const DELAY_MS = 3000;
+const INVITE_CODE  = '7C0TM814';
+const BASE_URL     = 'https://rewards.svpstars.com';
+const X_API        = 'https://api.x.com';
+const X_AUTH       = 'https://x.com';
+const X_BEARER     = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+const FOLLOW_TARGET = 'svpchain';
+const DELAY_MS     = 3000;
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function ask(question) {
+function ask(q) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()); }));
+  return new Promise(r => rl.question(q, a => { rl.close(); r(a.trim()); }));
 }
 
 function req(url, opts = {}) {
@@ -36,35 +37,25 @@ function req(url, opts = {}) {
         ...(opts.headers || {}),
       },
     };
-
     if (opts.body !== undefined) {
       const body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
       options.headers['Content-Length'] = Buffer.byteLength(body);
       options.headers['Content-Type'] = options.headers['Content-Type'] || 'application/json';
     }
-
     const chunks = [];
     const r = https.request(options, res => {
-      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      if ([301,302,303,307,308].includes(res.statusCode) && res.headers.location) {
         const loc = res.headers.location.startsWith('http')
           ? res.headers.location
           : `${u.protocol}//${u.hostname}${res.headers.location}`;
         return resolve({ status: res.statusCode, headers: res.headers, redirect: loc, body: '' });
       }
-
       let stream = res;
       const enc = res.headers['content-encoding'];
-      if (enc === 'gzip') {
-        const zlib = require('zlib');
-        stream = res.pipe(zlib.createGunzip());
-      } else if (enc === 'br') {
-        const zlib = require('zlib');
-        stream = res.pipe(zlib.createBrotliDecompress());
-      } else if (enc === 'deflate') {
-        const zlib = require('zlib');
-        stream = res.pipe(zlib.createInflate());
-      }
-
+      const zlib = require('zlib');
+      if (enc === 'gzip') stream = res.pipe(zlib.createGunzip());
+      else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
+      else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
       stream.on('data', c => chunks.push(c));
       stream.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
@@ -73,7 +64,6 @@ function req(url, opts = {}) {
         resolve({ status: res.statusCode, headers: res.headers, body });
       });
     });
-
     r.on('error', reject);
     if (opts.body !== undefined) {
       const body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
@@ -83,50 +73,33 @@ function req(url, opts = {}) {
   });
 }
 
-// ─── PKCE HELPER ─────────────────────────────────────────────────────────────
-function generatePKCE() {
-  const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  return { verifier, challenge };
-}
-
-function generateState() {
-  return crypto.randomBytes(16).toString('base64url');
-}
-
-// ─── PARSE ACCOUNTS ──────────────────────────────────────────────────────────
+// ─── PARSE FILES ─────────────────────────────────────────────────────────────
 function parseAkun(file) {
   const blocks = fs.readFileSync(file, 'utf8').trim().split(/\n\s*\n/);
-  const accounts = [];
-  for (const block of blocks) {
-    const lines = block.trim().split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length >= 2) {
-      accounts.push({ authtoken: lines[0], ct0: lines[1] });
-    }
-  }
-  return accounts;
+  return blocks.map(b => {
+    const lines = b.trim().split('\n').map(l => l.trim()).filter(Boolean);
+    return lines.length >= 2 ? { authtoken: lines[0], ct0: lines[1] } : null;
+  }).filter(Boolean);
 }
 
 function parseWallets(file) {
   return fs.readFileSync(file, 'utf8').trim().split('\n').map(l => l.trim()).filter(Boolean);
 }
 
-// ─── STEP 1: WALLET LOGIN ────────────────────────────────────────────────────
+function parseSessions(file) {
+  return fs.readFileSync(file, 'utf8').trim().split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+// ─── WALLET LOGIN ─────────────────────────────────────────────────────────────
 async function walletLogin(privkey) {
   const wallet = new ethers.Wallet(privkey);
   const address = wallet.address;
 
   const nonceRes = await req(`${BASE_URL}/api/v1/auth/nonce?address=${address}`);
-  if (!nonceRes.body?.data?.nonce) {
-    throw new Error(`Nonce gagal: ${JSON.stringify(nonceRes.body)}`);
-  }
-  const nonce = nonceRes.body.data.nonce;
+  if (!nonceRes.body?.data?.nonce) throw new Error(`Nonce gagal: ${JSON.stringify(nonceRes.body)}`);
 
-  // pakai message langsung dari API (bukan construct manual)
   const message = nonceRes.body.data.message
-    || `Sign in to SVP Rewards\n\nAddress: ${address}\nNonce: ${nonce}`;
-
-  console.log(`     message: ${JSON.stringify(message)}`);
+    || `Sign in to SVP Rewards\n\nAddress: ${address}\nNonce: ${nonceRes.body.data.nonce}`;
   const signature = await wallet.signMessage(message);
 
   const loginRes = await req(`${BASE_URL}/api/v1/auth/login`, {
@@ -135,57 +108,65 @@ async function walletLogin(privkey) {
     body: { address, inviteCode: INVITE_CODE, signature },
   });
 
-  if (!loginRes.body?.data?.token) {
-    throw new Error(`Login gagal: ${JSON.stringify(loginRes.body)}`);
-  }
-
-  return {
-    token: loginRes.body.data.token,
-    address,
-    user: loginRes.body.data.user,
-  };
+  if (!loginRes.body?.data?.token) throw new Error(`Login gagal: ${JSON.stringify(loginRes.body)}`);
+  return { token: loginRes.body.data.token, address, user: loginRes.body.data.user };
 }
 
-// ─── STEP 2: KONEK X ─────────────────────────────────────────────────────────
-async function connectX(jwtToken, xAccount) {
-  const { authtoken, ct0 } = xAccount;
-  const svpCookie = `_ga=GA1.1.000000000.0000000000; _ga_GQ09LVJ2ZP=GS2.1.0000000000$o1$g1$t0000000000$j0$l0$h0`;
+// ─── START TASK ───────────────────────────────────────────────────────────────
+async function startTask(token, taskId) {
+  const res = await req(`${BASE_URL}/api/v1/tasks/${taskId}/start`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Origin': BASE_URL, 'Referer': `${BASE_URL}/` },
+    body: {},
+  });
+  const userStatus = res.body?.data?.userStatus;
+  if (res.body?.code === 0 || userStatus === 'claimable' || userStatus === 'done') return true;
+  const msg = JSON.stringify(res.body || '');
+  if (msg.toLowerCase().includes('already')) return true;
+  throw new Error(`Start task ${taskId} gagal: ${msg}`);
+}
+
+// ─── CLAIM TASK ───────────────────────────────────────────────────────────────
+async function claimTask(token, taskId, maxRetry = 10, retryDelay = 15000) {
+  for (let i = 1; i <= maxRetry; i++) {
+    const res = await req(`${BASE_URL}/api/v1/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Origin': BASE_URL, 'Referer': `${BASE_URL}/` },
+      body: {},
+    });
+    if (res.body?.code === 0) {
+      return { points: res.body?.data?.pointsAwarded || res.body?.data?.totalPoints || 0 };
+    }
+    const msg = JSON.stringify(res.body || '');
+    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('done')) {
+      return { points: 0, note: 'sudah pernah claim' };
+    }
+    if (res.body?.code === 1002) {
+      console.log(`     ⏳ Claim task ${taskId} attempt ${i}/${maxRetry} — not ready, retry in ${retryDelay/1000}s...`);
+      if (i < maxRetry) await sleep(retryDelay);
+      continue;
+    }
+    throw new Error(`Claim task ${taskId} gagal: ${msg}`);
+  }
+  throw new Error(`Claim task ${taskId} gagal setelah ${maxRetry}x retry`);
+}
+
+// ─── TASK 1: KONEK X ──────────────────────────────────────────────────────────
+async function connectX(token, akun) {
+  const { authtoken, ct0 } = akun;
   const xCookie = `auth_token=${authtoken}; ct0=${ct0}; twid=u%3D0`;
 
   const startRes = await req(`${BASE_URL}/api/v1/social/x/start`, {
-    headers: {
-      'Authorization': `Bearer ${jwtToken}`,
-      'Cookie': svpCookie,
-      'Origin': BASE_URL,
-      'Referer': `${BASE_URL}/`,
-    },
+    headers: { 'Authorization': `Bearer ${token}`, 'Origin': BASE_URL, 'Referer': `${BASE_URL}/` },
   });
 
-  let authUrl;
-  if (startRes.body?.data?.authUrl || startRes.body?.data?.url) {
-    authUrl = startRes.body.data.authUrl || startRes.body.data.url;
-  } else if (startRes.redirect) {
-    authUrl = startRes.redirect;
-  } else {
-    const { verifier, challenge } = generatePKCE();
-    const state = generateState();
-    const clientId = 'VzRSdGNDVVhDQndZU2xVdHVETDI6MTpjaQ';
-    const redirectUri = `${BASE_URL}/api/v1/social/x/callback`;
-    const scope = 'tweet.read users.read follows.read offline.access';
-    authUrl = `${X_AUTH}/i/oauth2/authorize?client_id=${clientId}&code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
-    xAccount._verifier = verifier;
-    xAccount._state = state;
-  }
+  const authUrl = startRes.body?.data?.authUrl || startRes.body?.data?.url || startRes.redirect;
+  if (!authUrl) throw new Error(`Gagal dapet authUrl: ${JSON.stringify(startRes.body)}`);
 
-  console.log(`     [start] status: ${startRes.status} | redirect: ${startRes.redirect || '-'}`);
-  console.log(`     [start] body: ${JSON.stringify(startRes.body).slice(0, 300)}`);
-  if (!authUrl) throw new Error(`Gagal dapet auth URL X: ${JSON.stringify(startRes.body)}`);
-
-  // Step 2: GET auth_code via /i/api/2/oauth2/authorize (JSON endpoint, bukan HTML)
   const authUrlObj = new URL(authUrl);
-  const getAuthRes = await req(`https://x.com/i/api/2/oauth2/authorize?${authUrlObj.searchParams.toString()}`, {
+  const getRes = await req(`https://x.com/i/api/2/oauth2/authorize?${authUrlObj.searchParams.toString()}`, {
     headers: {
-      'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA`,
+      'Authorization': `Bearer ${X_BEARER}`,
       'Cookie': xCookie,
       'Accept': 'application/json',
       'X-Csrf-Token': ct0,
@@ -199,22 +180,13 @@ async function connectX(jwtToken, xAccount) {
     },
   });
 
-  const authCode = getAuthRes.body?.auth_code;
-  if (!authCode) {
-    throw new Error(`auth_code tidak ditemukan. Status: ${getAuthRes.status} Body: ${JSON.stringify(getAuthRes.body)}`);
-  }
-
-  // Step 3: POST approve
-  const approveBody = new URLSearchParams({
-    approval: 'true',
-    code: authCode,
-    consent_flow: 'web_consent',
-  }).toString();
+  const authCode = getRes.body?.auth_code;
+  if (!authCode) throw new Error(`auth_code tidak ditemukan: ${JSON.stringify(getRes.body)}`);
 
   const approveRes = await req(`${X_API}/2/oauth2/authorize`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA`,
+      'Authorization': `Bearer ${X_BEARER}`,
       'Cookie': xCookie,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Origin': 'https://x.com',
@@ -223,24 +195,19 @@ async function connectX(jwtToken, xAccount) {
       'X-Twitter-Active-User': 'yes',
       'X-Twitter-Client-Language': 'id',
     },
-    body: approveBody,
+    body: new URLSearchParams({ approval: 'true', code: authCode, consent_flow: 'web_consent' }).toString(),
   });
 
-  let code, state;
-  if (approveRes.body?.redirect_uri) {
-    const redirectUrl = new URL(approveRes.body.redirect_uri);
-    code = redirectUrl.searchParams.get('code');
-    state = redirectUrl.searchParams.get('state');
-  } else {
-    throw new Error(`Gagal dapat redirect_uri dari X: ${JSON.stringify(approveRes.body)}`);
-  }
+  if (!approveRes.body?.redirect_uri) throw new Error(`Gagal dapat redirect_uri: ${JSON.stringify(approveRes.body)}`);
 
-  if (!code) throw new Error('Code OAuth2 X tidak ditemukan');
+  const redirectUrl = new URL(approveRes.body.redirect_uri);
+  const code  = redirectUrl.searchParams.get('code');
+  const state = redirectUrl.searchParams.get('state');
+  if (!code) throw new Error('Code OAuth2 tidak ditemukan');
 
   const callbackRes = await req(`${BASE_URL}/api/v1/social/x/callback?state=${state}&code=${code}`, {
     headers: {
-      'Authorization': `Bearer ${jwtToken}`,
-      'Cookie': svpCookie,
+      'Authorization': `Bearer ${token}`,
       'Referer': 'https://x.com/',
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
@@ -248,172 +215,162 @@ async function connectX(jwtToken, xAccount) {
     },
   });
 
-  // log callback response buat debug
-  console.log(`     [callback] status: ${callbackRes.status} | redirect: ${callbackRes.redirect || '-'}`);
-  console.log(`     [callback] body: ${JSON.stringify(callbackRes.body).slice(0, 200)}`);
-
-  // ambil token baru kalau ada (SVP mungkin issue JWT baru setelah X linked)
-  const newToken = callbackRes.body?.data?.token || callbackRes.body?.token || null;
-  if (newToken) console.log(`     [callback] new token detected!`);
-
-  if (
-    callbackRes.redirect?.includes('x=linked') ||
-    callbackRes.body?.message === 'ok' ||
-    callbackRes.status === 200 ||
-    callbackRes.status === 302
-  ) {
-    return newToken || true;
+  if (callbackRes.redirect?.includes('x=linked') || callbackRes.status === 200 || callbackRes.status === 302) {
+    if (!callbackRes.redirect?.includes('x=error')) return true;
   }
-
-  // log response callback buat debug
-  console.log(`     callback status: ${callbackRes.status}`);
-  console.log(`     callback redirect: ${callbackRes.redirect || '(none)'}`);
-  console.log(`     callback body: ${JSON.stringify(callbackRes.body).slice(0, 300)}`);
-  console.log(`     callback headers: set-cookie=${callbackRes.headers?.['set-cookie']}`);
-
-  throw new Error(`Callback gagal: status ${callbackRes.status} ${JSON.stringify(callbackRes.body)}`);
+  throw new Error(`Callback X gagal: ${callbackRes.redirect || JSON.stringify(callbackRes.body)}`);
 }
 
-// ─── STEP 3: CLAIM ───────────────────────────────────────────────────────────
-async function claimTask(jwtToken, taskId = 1, maxRetry = 10, retryDelay = 15000) {
-  for (let attempt = 1; attempt <= maxRetry; attempt++) {
-    const claimRes = await req(`${BASE_URL}/api/v1/tasks/${taskId}/claim`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${jwtToken}`,
-        'Content-Type': 'application/json',
-        'Origin': BASE_URL,
-        'Referer': `${BASE_URL}/`,
-      },
-      body: {},
-    });
+// ─── TASK 2: FOLLOW X ─────────────────────────────────────────────────────────
+async function followX(akun) {
+  const { authtoken, ct0 } = akun;
+  const xHeaders = {
+    'Authorization': `Bearer ${X_BEARER}`,
+    'Cookie': `auth_token=${authtoken}; ct0=${ct0}`,
+    'X-Csrf-Token': ct0,
+    'X-Twitter-Active-User': 'yes',
+    'X-Twitter-Client-Language': 'id',
+    'Origin': 'https://x.com',
+    'Referer': 'https://x.com/',
+  };
 
-    if (claimRes.body?.code === 0) {
-      const pts = claimRes.body?.data?.pointsAwarded || claimRes.body?.data?.totalPoints || 0;
-      return { ok: true, points: pts };
-    }
-
-    const msg = JSON.stringify(claimRes.body || '');
-
-    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('done')) {
-      return { ok: true, points: 0, note: 'sudah pernah claim' };
-    }
-
-    // verification not ready → retry
-    if (claimRes.body?.code === 1002) {
-      console.log(`     ⏳ Claim attempt ${attempt}/${maxRetry} — verification not ready, retry in ${retryDelay/1000}s...`);
-      if (attempt < maxRetry) await sleep(retryDelay);
-      continue;
-    }
-
-    throw new Error(`Claim gagal: ${msg}`);
+  // cek dulu udah follow apa belum
+  const checkRes = await req(`${X_API}/1.1/friendships/show.json?source_screen_name=me&target_screen_name=${FOLLOW_TARGET}`, {
+    headers: xHeaders,
+  });
+  if (checkRes.body?.relationship?.source?.following === true) {
+    return { note: 'sudah follow' };
   }
 
-  throw new Error(`Claim gagal setelah ${maxRetry}x retry: verification not ready`);
+  // follow
+  const body = `screen_name=${FOLLOW_TARGET}&skip_status=true`;
+  const followRes = await req(`${X_API}/1.1/friendships/create.json`, {
+    method: 'POST',
+    headers: { ...xHeaders, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  if (followRes.status === 200) return { ok: true };
+  throw new Error(`Follow gagal: ${JSON.stringify(followRes.body)}`);
+}
+
+// ─── TASK 3: TELEGRAM (via tele.py) ──────────────────────────────────────────
+function runTele(sessionString) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('python3', ['tele.py', sessionString], { stdio: 'inherit' });
+    proc.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`tele.py exit code ${code}`));
+    });
+    proc.on('error', reject);
+  });
 }
 
 // ─── PROSES 1 AKUN ───────────────────────────────────────────────────────────
-async function processAkun(privkey, akun, label) {
+async function processAkun(privkey, akun, session, label) {
+  // Login
   console.log(`\n${label} 🔑 Wallet login...`);
-  const { token, address, user } = await walletLogin(privkey);
-  console.log(`${label} ✅ Login | ${address} | xHandle: ${user?.xHandle || '(kosong)'}`);
+  const { token, address } = await walletLogin(privkey);
+  console.log(`${label} ✅ Login | ${address}`);
 
   await sleep(1000);
 
-  console.log(`${label} 🐦 Konek X...`);
-  const newToken = await connectX(token, akun);
-  const claimToken = (typeof newToken === 'string') ? newToken : token;
-  console.log(`${label} ✅ X linked!${typeof newToken === 'string' ? ' (token diperbarui)' : ''}`);
+  // ── Task 1: Bind X ──
+  console.log(`${label} 🐦 [Task 1] Start + Konek X...`);
+  await startTask(token, 1);
+  await sleep(1000);
+  await connectX(token, akun);
+  console.log(`${label} ✅ X linked!`);
+  await sleep(5000);
+  const { points: pts1, note: n1 } = await claimTask(token, 1);
+  console.log(`${label} 🎁 Task 1 claimed! +${pts1} pts${n1 ? ` (${n1})` : ''}`);
 
-  // re-login setelah X linked — JWT lama mungkin belum tau X sudah connected
-  console.log(`${label} 🔄 Re-login untuk refresh JWT...`);
-  const { token: freshToken } = await walletLogin(privkey);
-  console.log(`${label} ✅ JWT fresh`);
+  await sleep(2000);
 
+  // ── Task 2: Follow X ──
+  console.log(`${label} 👤 [Task 2] Start + Follow @${FOLLOW_TARGET}...`);
+  await startTask(token, 2);
+  await sleep(1000);
+  const { note: fn } = await followX(akun);
+  console.log(`${label} ✅ Follow OK${fn ? ` (${fn})` : ''}`);
   await sleep(3000);
+  const { points: pts2, note: n2 } = await claimTask(token, 2);
+  console.log(`${label} 🎁 Task 2 claimed! +${pts2} pts${n2 ? ` (${n2})` : ''}`);
 
-  console.log(`${label} 🎁 Claim...`);
-  const { points, note } = await claimTask(freshToken);
-  console.log(`${label} ✅ Claim OK! +${points} pts${note ? ` (${note})` : ''}`);
+  await sleep(2000);
 
+  // ── Task 3: Join Telegram ──
+  console.log(`${label} 📱 [Task 3] Start + Join Telegram...`);
+  await startTask(token, 3);
+  await sleep(1000);
+  await runTele(session);
+  console.log(`${label} ✅ Telegram done!`);
+  await sleep(3000);
+  const { points: pts3, note: n3 } = await claimTask(token, 3);
+  console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+
+  const total = pts1 + pts2 + pts3;
+  console.log(`${label} 🏆 Total: +${total} pts`);
   return address;
 }
 
 // ─── MAIN ────────────────────────────────────────────────────────────────────
 async function main() {
   const privkeys = parseWallets('wallet.txt');
-  const akuns = parseAkun('akun.txt');
-  const total = Math.min(privkeys.length, akuns.length);
+  const akuns    = parseAkun('akun.txt');
+  const sessions = parseSessions('sessions.txt');
+  const total    = Math.min(privkeys.length, akuns.length, sessions.length);
 
   console.log(`\n╔══════════════════════════════════╗`);
   console.log(`║        SVP Stars Bot             ║`);
   console.log(`╚══════════════════════════════════╝`);
-  console.log(`Total akun tersedia: ${total}\n`);
+  console.log(`Total akun: ${total}\n`);
   console.log(`  1 → 1 akun`);
   console.log(`  2 → Semua akun`);
   console.log(`  3 → From X to end\n`);
 
   const pilihan = await ask('Pilih [1/2/3]: ');
-
-  let startIdx = 0;
-  let endIdx = total;
+  let startIdx = 0, endIdx = total;
 
   if (pilihan === '1') {
     const no = await ask(`Nomor akun (1-${total}): `);
     const idx = parseInt(no) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= total) {
-      console.log('Nomor tidak valid.'); process.exit(1);
-    }
-    startIdx = idx;
-    endIdx = idx + 1;
-
+    if (isNaN(idx) || idx < 0 || idx >= total) { console.log('Invalid'); process.exit(1); }
+    startIdx = idx; endIdx = idx + 1;
   } else if (pilihan === '2') {
-    startIdx = 0;
-    endIdx = total;
-
+    startIdx = 0; endIdx = total;
   } else if (pilihan === '3') {
     const from = await ask(`Mulai dari akun ke- (1-${total}): `);
     const idx = parseInt(from) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= total) {
-      console.log('Nomor tidak valid.'); process.exit(1);
-    }
-    startIdx = idx;
-    endIdx = total;
-
+    if (isNaN(idx) || idx < 0 || idx >= total) { console.log('Invalid'); process.exit(1); }
+    startIdx = idx; endIdx = total;
   } else {
-    console.log('Pilihan tidak valid.'); process.exit(1);
+    console.log('Invalid'); process.exit(1);
   }
 
-  console.log(`\nJalanin akun ${startIdx + 1} s/d ${endIdx}`);
-  console.log(`${'─'.repeat(50)}`);
+  console.log(`\nJalanin akun ${startIdx + 1} s/d ${endIdx}\n${'─'.repeat(50)}`);
 
   const results = [];
-
   for (let i = startIdx; i < endIdx; i++) {
-    const label = `[${i + 1}/${total}]`;
+    const label = `[${i+1}/${total}]`;
     try {
-      const address = await processAkun(privkeys[i], akuns[i], label);
-      results.push({ index: i + 1, address, status: 'OK' });
-    } catch (err) {
-      console.error(`${label} ❌ ${err.message}`);
-      results.push({ index: i + 1, status: 'FAIL', error: err.message });
+      const address = await processAkun(privkeys[i], akuns[i], sessions[i], label);
+      results.push({ index: i+1, address, status: 'OK' });
+    } catch (e) {
+      console.error(`${label} ❌ ${e.message}`);
+      results.push({ index: i+1, status: 'FAIL', error: e.message });
     }
-
     if (i < endIdx - 1) {
-      console.log(`\nDelay ${DELAY_MS / 1000}s...`);
+      console.log(`\nDelay ${DELAY_MS/1000}s...\n`);
       await sleep(DELAY_MS);
     }
   }
 
-  console.log(`\n${'─'.repeat(50)}`);
-  console.log(`SUMMARY:`);
+  console.log(`\n${'─'.repeat(50)}\nSUMMARY:`);
   results.forEach(r => {
     const icon = r.status === 'OK' ? '✅' : '❌';
-    const info = r.status === 'OK' ? r.address : r.error;
-    console.log(`  ${icon} [${r.index}] ${info}`);
+    console.log(`  ${icon} [${r.index}] ${r.status === 'OK' ? r.address : r.error}`);
   });
-  const ok = results.filter(r => r.status === 'OK').length;
-  console.log(`\nBerhasil: ${ok}/${results.length}`);
+  console.log(`\nBerhasil: ${results.filter(r => r.status === 'OK').length}/${results.length}`);
 }
 
 main().catch(console.error);
