@@ -331,15 +331,16 @@ function runTele(sessionString, startParam) {
 }
 
 // ─── PROSES 1 AKUN ───────────────────────────────────────────────────────────
-async function processAkun(privkey, akun, session, dcToken, label) {
+async function processAkun(privkey, akun, session, label) {
   // Login
   console.log(`\n${label} 🔑 Wallet login...`);
   const { token, address } = await walletLogin(privkey);
   console.log(`${label} ✅ Login | ${address}`);
+  console.log(`${label} 🔑 SVP Token: ${token}`);
 
   await sleep(1000);
 
-  let pts1 = 0, pts2 = 0, pts3 = 0, pts4 = 0;
+  let pts1 = 0, pts2 = 0, pts3 = 0;
 
   // ── Task 1: Bind X ──
   console.log(`${label} 🐦 [Task 1] Start + Konek X...`);
@@ -392,24 +393,9 @@ async function processAkun(privkey, akun, session, dcToken, label) {
     console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
   }
 
-  await sleep(2000);
+  console.log(`${label} 💬 [Task 4] Discord → konek manual via TM pake token di atas`);
 
-  // ── Task 4: Konek Discord ──
-  console.log(`${label} 💬 [Task 4] Start + Konek Discord...`);
-  const { userStatus: s4 } = await startTask(token, 4);
-  if (s4 === 'done') {
-    console.log(`${label} ⏭️  Task 4 sudah done, skip`);
-  } else {
-    await sleep(1000);
-    await connectDiscord(token, dcToken);
-    console.log(`${label} ✅ Discord linked!`);
-    await sleep(5000);
-    const { points: p4, note: n4 } = await claimTask(token, 4);
-    pts4 = p4;
-    console.log(`${label} 🎁 Task 4 claimed! +${pts4} pts${n4 ? ` (${n4})` : ''}`);
-  }
-
-  const total = pts1 + pts2 + pts3 + pts4;
+  const total = pts1 + pts2 + pts3;
   console.log(`${label} 🏆 Total: +${total} pts`);
   return address;
 }
@@ -419,8 +405,7 @@ async function main() {
   const privkeys = parseWallets('wallet.txt');
   const akuns    = parseAkun('akun.txt');
   const sessions = parseSessions('sessions.txt');
-  const discords = parseDiscord('discord.txt');
-  const total    = Math.min(privkeys.length, akuns.length, sessions.length, discords.length);
+  const total    = Math.min(privkeys.length, akuns.length, sessions.length);
 
   console.log(`\n╔══════════════════════════════════╗`);
   console.log(`║        SVP Stars Bot             ║`);
@@ -455,7 +440,7 @@ async function main() {
   for (let i = startIdx; i < endIdx; i++) {
     const label = `[${i+1}/${total}]`;
     try {
-      const address = await processAkun(privkeys[i], akuns[i], sessions[i], discords[i], label);
+      const address = await processAkun(privkeys[i], akuns[i], sessions[i], label);
       results.push({ index: i+1, address, status: 'OK' });
     } catch (e) {
       console.error(`${label} ❌ ${e.message}`);
