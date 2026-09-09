@@ -120,9 +120,10 @@ async function startTask(token, taskId) {
     body: {},
   });
   const userStatus = res.body?.data?.userStatus;
-  if (res.body?.code === 0 || userStatus === 'claimable' || userStatus === 'done') return true;
+  const tgLink = res.body?.data?.tgLink || null;
+  if (res.body?.code === 0 || userStatus === 'claimable' || userStatus === 'done') return { ok: true, tgLink };
   const msg = JSON.stringify(res.body || '');
-  if (msg.toLowerCase().includes('already')) return true;
+  if (msg.toLowerCase().includes('already')) return { ok: true, tgLink };
   throw new Error(`Start task ${taskId} gagal: ${msg}`);
 }
 
@@ -254,9 +255,11 @@ async function followX(akun) {
 }
 
 // ─── TASK 3: TELEGRAM (via tele.py) ──────────────────────────────────────────
-function runTele(sessionString) {
+function runTele(sessionString, startParam) {
+  const args = ['tele.py', sessionString];
+  if (startParam) args.push(startParam);
   return new Promise((resolve, reject) => {
-    const proc = spawn('python3', ['tele.py', sessionString], { stdio: 'inherit' });
+    const proc = spawn('python3', args, { stdio: 'inherit' });
     proc.on('close', code => {
       if (code === 0) resolve();
       else reject(new Error(`tele.py exit code ${code}`));
@@ -300,9 +303,11 @@ async function processAkun(privkey, akun, session, label) {
 
   // ── Task 3: Join Telegram ──
   console.log(`${label} 📱 [Task 3] Start + Join Telegram...`);
-  await startTask(token, 3);
+  const { tgLink } = await startTask(token, 3);
+  const startParam = tgLink ? new URL(tgLink).searchParams.get('start') : null;
+  console.log(`     tgLink: ${tgLink} | startParam: ${startParam}`);
   await sleep(1000);
-  await runTele(session);
+  await runTele(session, startParam);
   console.log(`${label} ✅ Telegram done!`);
   await sleep(3000);
   const { points: pts3, note: n3 } = await claimTask(token, 3);
