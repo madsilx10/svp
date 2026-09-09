@@ -325,10 +325,15 @@ async function processAkun(privkey, akun, label) {
   const claimToken = (typeof newToken === 'string') ? newToken : token;
   console.log(`${label} ✅ X linked!${typeof newToken === 'string' ? ' (token diperbarui)' : ''}`);
 
-  await sleep(2000);
+  // re-login setelah X linked — JWT lama mungkin belum tau X sudah connected
+  console.log(`${label} 🔄 Re-login untuk refresh JWT...`);
+  const { token: freshToken } = await walletLogin(privkey);
+  console.log(`${label} ✅ JWT fresh`);
+
+  await sleep(3000);
 
   console.log(`${label} 🎁 Claim...`);
-  const { points, note } = await claimTask(claimToken);
+  const { points, note } = await claimTask(freshToken);
   console.log(`${label} ✅ Claim OK! +${points} pts${note ? ` (${note})` : ''}`);
 
   return address;
