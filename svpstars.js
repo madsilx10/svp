@@ -162,8 +162,8 @@ async function connectX(jwtToken, xAccount) {
   });
 
   let authUrl;
-  if (startRes.body?.data?.url) {
-    authUrl = startRes.body.data.url;
+  if (startRes.body?.data?.authUrl || startRes.body?.data?.url) {
+    authUrl = startRes.body.data.authUrl || startRes.body.data.url;
   } else if (startRes.redirect) {
     authUrl = startRes.redirect;
   } else {
