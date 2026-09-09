@@ -179,9 +179,11 @@ async function connectX(jwtToken, xAccount) {
 
   if (!authUrl) throw new Error(`Gagal dapet auth URL X: ${JSON.stringify(startRes.body)}`);
 
+  // GET authorize page — balik HTML, auth_code ada di dalamnya
   const authorizeRes = await req(authUrl, {
     headers: {
       'Cookie': xCookie,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Referer': 'https://x.com/',
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
@@ -194,23 +196,35 @@ async function connectX(jwtToken, xAccount) {
   let code, state;
 
   if (authorizeRes.redirect) {
+    // auto-approved langsung redirect ke callback
     const redirectUrl = new URL(authorizeRes.redirect);
     code = redirectUrl.searchParams.get('code');
     state = redirectUrl.searchParams.get('state');
   } else {
+    // parse auth_code dari HTML (X embed di script tag)
+    const html = typeof authorizeRes.body === 'string' ? authorizeRes.body : '';
+    const authCodeMatch = html.match(/"auth_code"\s*:\s*"([^"]+)"/);
+    const authCode = authCodeMatch ? authCodeMatch[1] : '';
+
+    if (!authCode) {
+      throw new Error(`auth_code tidak ditemukan. Status: ${authorizeRes.status}, Body: ${html.slice(0,300)}`);
+    }
+
     const approveBody = new URLSearchParams({
       approval: 'true',
-      code: authorizeRes.body?.auth_code || '',
+      code: authCode,
     }).toString();
+
+    const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOh5E6I6xnZZ3qiA';
 
     const approveRes = await req(`${X_API}/2/oauth2/authorize`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOh5E6I6xnZZ3qiA`,
+        'Authorization': `Bearer ${TWITTER_BEARER}`,
         'Cookie': xCookie,
         'Content-Type': 'application/x-www-form-urlencoded',
         'Origin': 'https://x.com',
-        'Referer': 'https://x.com/',
+        'Referer': authUrl,
         'X-Csrf-Token': ct0,
         'X-Twitter-Active-User': 'yes',
         'X-Twitter-Auth-Type': 'OAuth2Session',
