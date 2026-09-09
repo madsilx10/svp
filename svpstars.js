@@ -179,71 +179,58 @@ async function connectX(jwtToken, xAccount) {
 
   if (!authUrl) throw new Error(`Gagal dapet auth URL X: ${JSON.stringify(startRes.body)}`);
 
-  // GET authorize page — balik HTML, auth_code ada di dalamnya
-  const authorizeRes = await req(authUrl, {
+  // Step 2: GET auth_code via /i/api/2/oauth2/authorize (JSON endpoint, bukan HTML)
+  const authUrlObj = new URL(authUrl);
+  const getAuthRes = await req(`https://x.com/i/api/2/oauth2/authorize?${authUrlObj.searchParams.toString()}`, {
     headers: {
+      'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA`,
       'Cookie': xCookie,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept': 'application/json',
+      'X-Csrf-Token': ct0,
+      'X-Twitter-Active-User': 'yes',
+      'X-Twitter-Client-Language': 'id',
+      'Origin': 'https://x.com',
       'Referer': 'https://x.com/',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'cross-site',
-      'Sec-Fetch-User': '?1',
-      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
     },
   });
 
-  let code, state;
+  const authCode = getAuthRes.body?.auth_code;
+  if (!authCode) {
+    throw new Error(`auth_code tidak ditemukan. Status: ${getAuthRes.status} Body: ${JSON.stringify(getAuthRes.body)}`);
+  }
 
-  if (authorizeRes.redirect) {
-    // auto-approved langsung redirect ke callback
-    const redirectUrl = new URL(authorizeRes.redirect);
+  // Step 3: POST approve
+  const approveBody = new URLSearchParams({
+    approval: 'true',
+    code: authCode,
+    consent_flow: 'web_consent',
+  }).toString();
+
+  const approveRes = await req(`${X_API}/2/oauth2/authorize`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA`,
+      'Cookie': xCookie,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://x.com',
+      'Referer': 'https://x.com/',
+      'X-Csrf-Token': ct0,
+      'X-Twitter-Active-User': 'yes',
+      'X-Twitter-Client-Language': 'id',
+    },
+    body: approveBody,
+  });
+
+  let code, state;
+  if (approveRes.body?.redirect_uri) {
+    const redirectUrl = new URL(approveRes.body.redirect_uri);
     code = redirectUrl.searchParams.get('code');
     state = redirectUrl.searchParams.get('state');
   } else {
-    // parse auth_code dari HTML (X embed di script tag)
-    const html = typeof authorizeRes.body === 'string' ? authorizeRes.body : '';
-    const authCodeMatch = html.match(/"auth_code"\s*:\s*"([^"]+)"/);
-    const authCode = authCodeMatch ? authCodeMatch[1] : '';
-
-    if (!authCode) {
-      throw new Error(`auth_code tidak ditemukan. Status: ${authorizeRes.status}, Body: ${html.slice(0,300)}`);
-    }
-
-    const approveBody = new URLSearchParams({
-      approval: 'true',
-      code: authCode,
-    }).toString();
-
-    const TWITTER_BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOh5E6I6xnZZ3qiA';
-
-    const approveRes = await req(`${X_API}/2/oauth2/authorize`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${TWITTER_BEARER}`,
-        'Cookie': xCookie,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://x.com',
-        'Referer': authUrl,
-        'X-Csrf-Token': ct0,
-        'X-Twitter-Active-User': 'yes',
-        'X-Twitter-Auth-Type': 'OAuth2Session',
-        'X-Twitter-Client-Language': 'id',
-      },
-      body: approveBody,
-    });
-
-    if (approveRes.body?.redirect_uri) {
-      const redirectUrl = new URL(approveRes.body.redirect_uri);
-      code = redirectUrl.searchParams.get('code');
-      state = redirectUrl.searchParams.get('state');
-    } else if (approveRes.redirect) {
-      const redirectUrl = new URL(approveRes.redirect);
-      code = redirectUrl.searchParams.get('code');
-      state = redirectUrl.searchParams.get('state');
-    } else {
-      throw new Error(`Gagal dapat code dari X: ${JSON.stringify(approveRes.body)}`);
-    }
+    throw new Error(`Gagal dapat redirect_uri dari X: ${JSON.stringify(approveRes.body)}`);
   }
 
   if (!code) throw new Error('Code OAuth2 X tidak ditemukan');
