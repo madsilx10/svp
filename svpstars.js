@@ -393,17 +393,22 @@ async function processAkun(privkey, akun, session, label) {
     console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
   }
 
-  // ── Task 4: Join Discord (manual via TM) ──
+  // ── Task 4: Join Discord ──
   let pts4 = 0;
-  console.log(`${label} 💬 [Task 4] Konek Discord manual via TM`);
-  await startTask(token, 4);
-  console.log(`     → Buka browser, jalanin TM script pake SVP token di atas`);
-  console.log(`     → Setelah Discord terkonek, tekan Enter di sini...`);
-  await ask('     Tekan Enter setelah Discord terhubung: ');
-  await sleep(2000);
-  const { points: p4, note: n4 } = await claimTask(token, 4);
-  pts4 = p4;
-  console.log(`${label} 🎁 Task 4 claimed! +${pts4} pts${n4 ? ` (${n4})` : ''}`);
+  console.log(`${label} 💬 [Task 4] Discord...`);
+  const { userStatus: s4 } = await startTask(token, 4);
+  if (s4 === 'done') {
+    console.log(`${label} ⏭️  Task 4 sudah done, skip`);
+  } else {
+    console.log(`     → Buka browser, jalanin TM script`);
+    console.log(`     → SVP token ada di atas ↑`);
+    console.log(`     → Setelah ✅ DONE muncul di TM, tekan Enter`);
+    await ask('     Tekan Enter setelah Discord terhubung: ');
+    await sleep(2000);
+    const { points: p4, note: n4 } = await claimTask(token, 4);
+    pts4 = p4;
+    console.log(`${label} 🎁 Task 4 claimed! +${pts4} pts${n4 ? ` (${n4})` : ''}`);
+  }
 
   const total = pts1 + pts2 + pts3 + pts4;
   console.log(`${label} 🏆 Total: +${total} pts`);
