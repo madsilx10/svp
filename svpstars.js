@@ -428,14 +428,11 @@ async function processAkun(privkey, akun, session, label) {
     console.log(`     → SVP token ada di atas ↑`);
     console.log(`     → Setelah ✅ DONE muncul di TM, tekan Enter`);
     await ask('     Tekan Enter setelah Discord terhubung: ');
-    await sleep(2000);
-    const { points: p4, note: n4 } = await claimTask(token, 4);
-    pts4 = p4;
-    console.log(`${label} 🎁 Task 4 claimed! +${pts4} pts${n4 ? ` (${n4})` : ''}`);
+    console.log(`${label} ✅ Discord terhubung! Claim nanti pake mode 2`);
   }
 
-  const total = pts1 + pts2 + pts3 + pts4;
-  console.log(`${label} 🏆 Total: +${total} pts`);
+  const total = pts1 + pts2 + pts3;
+  console.log(`${label} 🏆 Total task 1-3: +${total} pts`);
   return address;
 }
 
