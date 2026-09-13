@@ -385,12 +385,36 @@ async function processAkun(privkey, akun, session, label) {
     const startParam = tgLink ? new URL(tgLink).searchParams.get('start') : null;
     console.log(`     tgLink: ${tgLink} | startParam: ${startParam}`);
     await sleep(1000);
-    await runTele(session, startParam);
-    console.log(`${label} ✅ Telegram done!`);
+    let teleOk = false;
+    try {
+      await runTele(session, startParam);
+      console.log(`${label} ✅ Telegram done!`);
+      teleOk = true;
+    } catch(e) {
+      console.log(`     ⚠️ tele.py gagal: ${e.message}`);
+    }
+    if (!teleOk) {
+      console.log(`     → Buka manual: ${tgLink}`);
+      console.log(`     → Tekan START di bot, lalu tekan Enter`);
+      await ask('     Tekan Enter setelah START di bot: ');
+    }
     await sleep(3000);
-    const { points: p3, note: n3 } = await claimTask(token, 3);
-    pts3 = p3;
-    console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+    try {
+      const { points: p3, note: n3 } = await claimTask(token, 3);
+      pts3 = p3;
+      console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+    } catch(e) {
+      if (e.message.includes('1004') || e.message.includes('link your Telegram')) {
+        console.log(`     ⚠️ Telegram belum ke-link, buka manual: ${tgLink}`);
+        await ask('     Buka link di atas → tekan START → tekan Enter: ');
+        await sleep(3000);
+        const { points: p3, note: n3 } = await claimTask(token, 3);
+        pts3 = p3;
+        console.log(`${label} 🎁 Task 3 claimed! +${pts3} pts${n3 ? ` (${n3})` : ''}`);
+      } else {
+        throw e;
+      }
+    }
   }
 
   // ── Task 4: Join Discord ──
@@ -416,6 +440,34 @@ async function processAkun(privkey, akun, session, label) {
 }
 
 // ─── MAIN ────────────────────────────────────────────────────────────────────
+async function claimDiscordMode(privkeys, startIdx, endIdx, total) {
+  console.log(`\nClaim Discord akun ${startIdx + 1} s/d ${endIdx}\n${'─'.repeat(50)}`);
+  const results = [];
+  for (let i = startIdx; i < endIdx; i++) {
+    const label = `[${i+1}/${total}]`;
+    try {
+      console.log(`\n${label} 🔑 Login...`);
+      const { token, address } = await walletLogin(privkeys[i]);
+      console.log(`${label} ✅ ${address}`);
+      await sleep(1000);
+      console.log(`${label} 🎁 Claim Discord (Task 4)...`);
+      const { points, note } = await claimTask(token, 4);
+      console.log(`${label} ✅ +${points} pts${note ? ` (${note})` : ''}`);
+      results.push({ index: i+1, address, status: 'OK', points });
+    } catch(e) {
+      console.error(`${label} ❌ ${e.message}`);
+      results.push({ index: i+1, status: 'FAIL', error: e.message });
+    }
+    if (i < endIdx - 1) await sleep(DELAY_MS);
+  }
+  console.log(`\n${'─'.repeat(50)}\nSUMMARY:`);
+  results.forEach(r => {
+    const icon = r.status === 'OK' ? '✅' : '❌';
+    console.log(`  ${icon} [${r.index}] ${r.status === 'OK' ? `${r.address} +${r.points} pts` : r.error}`);
+  });
+  console.log(`\nBerhasil: ${results.filter(r => r.status === 'OK').length}/${results.length}`);
+}
+
 async function main() {
   const privkeys = parseWallets('wallet.txt');
   const akuns    = parseAkun('akun.txt');
@@ -426,9 +478,17 @@ async function main() {
   console.log(`║        SVP Stars Bot             ║`);
   console.log(`╚══════════════════════════════════╝`);
   console.log(`Total akun: ${total}\n`);
-  console.log(`  1 → 1 akun`);
-  console.log(`  2 → Semua akun`);
-  console.log(`  3 → From X to end\n`);
+  console.log(`  Mode:`);
+  console.log(`    1 → Semua task`);
+  console.log(`    2 → Claim Discord (Task 4)\n`);
+
+  const mode = await ask('Mode [1/2]: ');
+  if (mode !== '1' && mode !== '2') { console.log('Invalid'); process.exit(1); }
+
+  console.log(`\n  Akun:`);
+  console.log(`    1 → 1 akun`);
+  console.log(`    2 → Semua akun`);
+  console.log(`    3 → From X to end\n`);
 
   const pilihan = await ask('Pilih [1/2/3]: ');
   let startIdx = 0, endIdx = total;
@@ -448,6 +508,8 @@ async function main() {
   } else {
     console.log('Invalid'); process.exit(1);
   }
+
+  if (mode === '2') return claimDiscordMode(privkeys, startIdx, endIdx, total);
 
   console.log(`\nJalanin akun ${startIdx + 1} s/d ${endIdx}\n${'─'.repeat(50)}`);
 
